@@ -81,6 +81,10 @@ Name it `owned.txt` and no flag is needed — it is one of the auto-detected
 filenames. Both list formats accept `#` comment lines, so a file can record
 where each title came from:
 
+`owned.txt` is in `.gitignore` and stays on your machine. It is your library, so
+it has no business in a public repository; `owned.example.txt` is the committed
+template that shows the format.
+
 The parser keeps `$0.00` receipts, drops paid ones unless you pass
 `--include-paid`, reads either rendered text or raw HTML, and collapses the
 duplicate rows Epic writes when a game has several editions (`Home - A Unique
@@ -123,6 +127,20 @@ Cron alternative for a machine that stays on:
 ```
 
 Scope worth knowing: this feed carries **PC** freebies only. Epic's Android and iOS free games are separate claim items and don't appear in `freeGamesPromotions`, which is why third-party "everything at once" links sometimes list more rows than this does.
+
+## Tests
+
+```bash
+python3 -m unittest -v test_toolkit
+```
+
+23 offline tests, stdlib `unittest` only — no network, no fixture files, runs in about 2ms. They cover the three places a manual run cannot reach:
+
+- **The GOG giveaway branch.** It only fires while a 100%-off promotion is live, so in practice it had never executed.
+- **Slug matching.** The `SOLAS 128` → `2` and `Dungeon Drafters` → `raft` false positives that forced strict matching in the first place.
+- **Store parsing**, including `NVIDIA Bundle` titles, which used to report as "no store listed" when they are simply not claimable via Epic or GOG.
+
+One known limitation is documented rather than tested: status is matched against flattened page text, so a title that itself contains a status word can win over the real badge. That is harmless because only the exact value `Available` can enable a `CLAIM` — every misparse resolves to a not-playable status.
 
 ## One combined weekly run
 

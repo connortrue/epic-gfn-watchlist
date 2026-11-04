@@ -58,26 +58,17 @@ NOISE_RE = re.compile(
 )
 
 
-def load_free(force=False):
-    """Every GOG product currently priced at zero, cached for CACHE_TTL."""
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    cache = os.path.join(CACHE_DIR, "gog-free.json")
+DETAIL_CACHE_VERSION = 2  # bump when parsing changes, so stale parses are dropped
 
-    if not force and os.path.exists(cache):
-        if time.time() - os.path.getmtime(cache) < CACHE_TTL:
-            with open(cache, encoding="utf-8") as fh:
-                return json.load(fh)
 
-    raw, page = [], 1
-    while page <= PAGE_LIMIT:
-        data = fetch_json(CATALOG_URL.format(page=page), timeout=35)
-        batch = data.get("products") or []
-        raw.extend(batch)
-        if len(batch) < 48:
-            break
-        page += 1
-        time.sleep(0.3)  # be polite; this endpoint is not a public API
+def classify_products(raw):
+    """Turn raw catalog products into free items, flagging real giveaways.
 
+    Pure function, no network, so the giveaway branch can be tested even though
+    a giveaway is rarely live. A product is a giveaway when its base price is
+    above zero and its final price has fallen to zero; a base price of zero is
+    a permanently free title with no deadline.
+    """
     items = []
     for product in raw:
         price = product.get("price") or {}
@@ -98,11 +89,33 @@ def load_free(force=False):
             "title": title,
             "slug": product.get("slug") or "",
             "url": product.get("storeLink") or "",
-            # A non-zero base price that has fallen to zero is a 100%-off
-            # promotion, i.e. a real giveaway with an expiry.
             "giveaway": base_value > 0,
             "base_price": base_value,
         })
+    return items
+
+
+def load_free(force=False):
+    """Every GOG product currently priced at zero, cached for CACHE_TTL."""
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    cache = os.path.join(CACHE_DIR, "gog-free.json")
+
+    if not force and os.path.exists(cache):
+        if time.time() - os.path.getmtime(cache) < CACHE_TTL:
+            with open(cache, encoding="utf-8") as fh:
+                return json.load(fh)
+
+    raw, page = [], 1
+    while page <= PAGE_LIMIT:
+        data = fetch_json(CATALOG_URL.format(page=page), timeout=35)
+        batch = data.get("products") or []
+        raw.extend(batch)
+        if len(batch) < 48:
+            break
+        page += 1
+        time.sleep(0.3)  # be polite; this endpoint is not a public API
+
+    items = classify_products(raw)
 
     with open(cache, "w", encoding="utf-8") as fh:
         json.dump(items, fh)
@@ -110,13 +123,16 @@ def load_free(force=False):
 
 
 def load_detail_cache():
+    """Cached GFN detail pages, discarded when the parser version changes."""
     path = os.path.join(CACHE_DIR, "gog-details.json")
     if os.path.exists(path) and time.time() - os.path.getmtime(path) < CACHE_TTL:
         try:
             with open(path, encoding="utf-8") as fh:
-                return json.load(fh)
+                payload = json.load(fh)
         except (OSError, json.JSONDecodeError):
             return {}
+        if payload.get("version") == DETAIL_CACHE_VERSION:
+            return payload.get("details") or {}
     return {}
 
 
@@ -125,7 +141,7 @@ def save_detail_cache(details):
     path = os.path.join(CACHE_DIR, "gog-details.json")
     try:
         with open(path, "w", encoding="utf-8") as fh:
-            json.dump(details, fh)
+            json.dump({"version": DETAIL_CACHE_VERSION, "details": details}, fh)
     except OSError:
         pass
 

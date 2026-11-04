@@ -279,24 +279,41 @@ def clean_html(text):
     return re.sub(r"\s+", " ", text)
 
 
-def game_detail(slug):
-    """Availability, tier, stores and verification date from the GFN game page."""
-    body = clean_html(fetch(GAME_URL.format(slug=slug), timeout=25))
+STORE_PATTERN = re.compile(
+    r"\b(Steam|Epic|Ubisoft Connect|Xbox|EA App|GOG|Battle\.net|NVIDIA Bundle)\b"
+)
 
+
+def parse_game_detail(body):
+    """Parse an already tag-stripped GFN game page.
+
+    Split out of game_detail so it can be tested without the network.
+
+    NVIDIA Bundle is a real store row on GFN pages ("NVIDIA Bundle . 101XP.Com"").
+    Leaving it out made those titles look store-less, when the truth is they are
+    listed on a store that no Epic or GOG claim can ever reach.
+
+    The status is matched against flat text, so a title that itself contains a
+    status word ("Some Delisted Game") can win over the page's real badge. That
+    is tolerated because only the exact value "Available" can enable a claim:
+    every misparse resolves to a not-playable status, never a false CLAIM.
+    """
     status = re.search(r"\b(Available|Unavailable|Coming Soon|Delisted)\b", body)
     tier = re.search(r"Membership\s+(Free tier|Premium required|\w+)", body)
     verified = re.search(
         r"Last verified[^0-9]{0,15}([0-9]{1,2} [A-Z][a-z]{2} [0-9]{4})", body
     )
-    stores = sorted(set(re.findall(
-        r"\b(Steam|Epic|Ubisoft Connect|Xbox|EA App|GOG|Battle\.net)\b", body
-    )))
     return {
         "status": status.group(1) if status else "?",
         "tier": tier.group(1) if tier else "?",
         "verified": verified.group(1) if verified else "?",
-        "stores": stores,
+        "stores": sorted(set(STORE_PATTERN.findall(body))),
     }
+
+
+def game_detail(slug):
+    """Availability, tier, stores and verification date from the GFN game page."""
+    return parse_game_detail(clean_html(fetch(GAME_URL.format(slug=slug), timeout=25)))
 
 
 # ---------------------------------------------------------------- owned library
