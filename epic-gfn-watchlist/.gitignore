@@ -1,0 +1,4 @@
+# regenerated catalog and detail caches
+.cache/
+__pycache__/
+*.pyc
