@@ -6,3 +6,7 @@ __pycache__/
 # your own Epic library (built from receipts) - personal, never commit it.
 # owned.example.txt is the committed template.
 owned.txt
+
+# scheduler output and the "this week is already done" marker
+weekly.log
+.last_weekly_run

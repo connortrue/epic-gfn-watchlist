@@ -12,13 +12,19 @@ Three things are covered that manual runs cannot reach:
     live -- so in practice it had never executed;
   * slug matching, which once produced false positives by substring matching
     ("SOLAS 128" -> "2", "Dungeon Drafters" -> "raft");
-  * store parsing, including NVIDIA Bundle titles that used to look store-less.
+  * store parsing, including NVIDIA Bundle titles that used to look store-less;
+  * the cron path, so a missed Thursday still produces exactly one digest.
 """
 
+import datetime
+import os
+import shutil
+import tempfile
 import unittest
 
 import gog_watchlist as gog
 import watchlist as epic
+import weekly
 
 
 def gog_product(title="Some Game", slug="some_game", base="0.00", final="0.00",
@@ -214,6 +220,59 @@ class GogVerdicts(unittest.TestCase):
         row = gog.evaluate(item, set(), set(), {})
         self.assertEqual(row["verdict"], "SKIP")
         self.assertEqual(row["stores"], [])
+
+
+class Schedule(unittest.TestCase):
+    """The cron path: once per rotation, never early, never twice."""
+
+    # Thursday 5 Nov 2026: the rotation was 16:00 UTC, 11:00 Eastern (EST).
+    ROTATION = datetime.datetime(2026, 11, 5, 16, 0, tzinfo=datetime.timezone.utc)
+    AFTER = ROTATION + datetime.timedelta(minutes=20)
+    BEFORE = ROTATION - datetime.timedelta(minutes=20)
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.stamp = os.path.join(self.dir, ".last_weekly_run")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def record_run(self, when):
+        with open(self.stamp, "w") as fh:
+            fh.write(str(int(when.timestamp())))
+
+    def test_settled_rotation_is_this_weeks(self):
+        self.assertEqual(weekly.settled_rotation(self.AFTER), self.ROTATION)
+
+    def test_grace_period_holds_an_early_run_back(self):
+        # 11:10 ET is inside the 15-minute grace, so last week still counts.
+        early = self.ROTATION + datetime.timedelta(minutes=10)
+        self.assertEqual(weekly.settled_rotation(early),
+                         self.ROTATION - datetime.timedelta(days=7))
+
+    def test_never_ran_is_due(self):
+        self.assertIsNone(weekly.skip_reason(self.AFTER, stamp=self.stamp))
+
+    def test_ran_last_week_is_due(self):
+        self.record_run(self.ROTATION - datetime.timedelta(days=7)
+                        + datetime.timedelta(minutes=5))
+        self.assertIsNone(weekly.skip_reason(self.AFTER, stamp=self.stamp))
+
+    def test_ran_this_week_is_skipped(self):
+        self.record_run(self.AFTER)
+        reason = weekly.skip_reason(self.AFTER + datetime.timedelta(days=1),
+                                    stamp=self.stamp)
+        self.assertIn("already ran", reason)
+
+    def test_before_the_rotation_is_skipped(self):
+        self.record_run(self.ROTATION - datetime.timedelta(days=7)
+                        + datetime.timedelta(minutes=5))
+        self.assertIsNotNone(weekly.skip_reason(self.BEFORE, stamp=self.stamp))
+
+    def test_unreadable_stamp_runs_anyway(self):
+        with open(self.stamp, "w") as fh:
+            fh.write("not a timestamp")
+        self.assertIsNone(weekly.skip_reason(self.AFTER, stamp=self.stamp))
 
 
 if __name__ == "__main__":

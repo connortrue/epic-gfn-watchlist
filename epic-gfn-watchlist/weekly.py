@@ -11,6 +11,7 @@ useful for drilling into one source.
     python3 weekly.py --json
     python3 weekly.py --all       # include the skips
     python3 weekly.py --wait      # sleep until the Thursday rotation first
+    python3 weekly.py --if-due    # run only if a rotation is unhandled (for cron)
 
 Stdlib only, no API keys.
 """
@@ -24,6 +25,54 @@ import time
 
 import gog_watchlist as gog
 import watchlist as epic
+
+
+# Epic's feed lags the 11:00 ET switch by a few minutes. A run before the grace
+# period has passed would log last week's games and then consider the week done.
+GRACE = datetime.timedelta(minutes=15)
+
+STAMP = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".last_weekly_run")
+
+
+def settled_rotation(now=None):
+    """The most recent rotation whose games are definitely in the feed.
+
+    Evaluating the next rotation GRACE minutes in the past is what makes the
+    grace period work: at 11:10 ET it still returns last week's Thursday, so an
+    early cron run waits; from 11:16 ET onwards it returns today's.
+    """
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    return epic.next_rotation(now - GRACE) - datetime.timedelta(days=7)
+
+
+def last_run(stamp=STAMP):
+    try:
+        with open(stamp) as fh:
+            return datetime.datetime.fromtimestamp(int(fh.read().strip()),
+                                                   datetime.timezone.utc)
+    except (OSError, ValueError):
+        return None
+
+
+def mark_ran(now=None, stamp=STAMP):
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    try:
+        with open(stamp, "w") as fh:
+            fh.write(str(int(now.timestamp())))
+    except OSError:
+        pass
+
+
+def skip_reason(now=None, stamp=STAMP):
+    """Why there is nothing to do, or None when a rotation is waiting."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    settled = settled_rotation(now)
+    last = last_run(stamp)
+    if last is not None and last >= settled:
+        return (f"already ran {last:%a %d %b %H:%M} UTC, after the "
+                f"{settled:%a %d %b} rotation; next one "
+                f"{settled + datetime.timedelta(days=7):%a %d %b %H:%M} UTC")
+    return None
 
 
 def epic_rows(catalog, owned_slugs):
@@ -83,18 +132,7 @@ def print_block(title, rows):
             print(f"         {r['link']}")
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Weekly Epic + GOG freebies vs GeForce NOW")
-    ap.add_argument("--json", action="store_true", help="emit JSON")
-    ap.add_argument("--all", action="store_true", help="also list titles not worth claiming")
-    ap.add_argument("--links", action="store_true", help="print claim URLs only")
-    ap.add_argument("--owned", metavar="PATH", help="library export to flag titles you own")
-    ap.add_argument("--refresh", action="store_true", help="ignore the cached GOG catalog")
-    ap.add_argument("--include-demos", action="store_true", help="keep GOG demos and prologues")
-    ap.add_argument("--wait", action="store_true",
-                    help="sleep until the next Thursday 11:00 US Eastern rotation")
-    args = ap.parse_args()
-
+def run(args):
     if args.wait:
         target = epic.next_rotation()
         delay = (target - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
@@ -169,6 +207,33 @@ def main():
 
     print("\nReminder: a store's giveaway only helps where GFN lists that same store.")
     return 0 if not failures else 1
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Weekly Epic + GOG freebies vs GeForce NOW")
+    ap.add_argument("--json", action="store_true", help="emit JSON")
+    ap.add_argument("--all", action="store_true", help="also list titles not worth claiming")
+    ap.add_argument("--links", action="store_true", help="print claim URLs only")
+    ap.add_argument("--owned", metavar="PATH", help="library export to flag titles you own")
+    ap.add_argument("--refresh", action="store_true", help="ignore the cached GOG catalog")
+    ap.add_argument("--include-demos", action="store_true", help="keep GOG demos and prologues")
+    ap.add_argument("--wait", action="store_true",
+                    help="sleep until the next Thursday 11:00 US Eastern rotation")
+    ap.add_argument("--if-due", action="store_true",
+                    help="do nothing unless a rotation has happened since the last run")
+    args = ap.parse_args()
+
+    if args.if_due:
+        reason = skip_reason()
+        if reason:
+            print(f"not due -- {reason}")
+            return 0
+
+    status = run(args)
+    # A PARTIAL RUN deliberately does not count: the next catch-up retries it.
+    if status == 0:
+        mark_ran()
+    return status
 
 
 if __name__ == "__main__":

@@ -134,7 +134,7 @@ Scope worth knowing: this feed carries **PC** freebies only. Epic's Android and 
 python3 -m unittest -v test_toolkit
 ```
 
-23 offline tests, stdlib `unittest` only — no network, no fixture files, runs in about 2ms. They cover the three places a manual run cannot reach:
+30 offline tests, stdlib `unittest` only — no network, no fixture files, runs in about 2ms. They cover the three places a manual run cannot reach:
 
 - **The GOG giveaway branch.** It only fires while a 100%-off promotion is live, so in practice it had never executed.
 - **Slug matching.** The `SOLAS 128` → `2` and `Dungeon Drafters` → `raft` false positives that forced strict matching in the first place.
@@ -168,11 +168,37 @@ It sorts into four buckets, in the order that matters: **claim now** (free and e
 
 Both feeds are checked against one catalog load, and if one store's endpoint is down the other still prints — you get a `PARTIAL RUN` banner instead of a traceback. Flags: `--links`, `--json`, `--all`, `--owned`, `--refresh`, `--include-demos`, `--wait` (sleep until the Thursday rotation).
 
-For the Thursday cron, this one line replaces the per-store scripts:
+### Making it run itself
 
+One command installs the schedule:
+
+```bash
+./install_cron.sh
 ```
-5 11 * * 4  cd ~/epic-gfn-watchlist && /usr/bin/python3 weekly.py >> weekly.log 2>&1
+
+It deliberately does **not** schedule "Thursday at 11:00". A laptop asleep at
+11am would simply miss the week, and a fixed local hour drifts against Eastern
+time at every daylight-saving change. Instead it schedules a daily check plus one
+at boot, and `weekly.py --if-due` decides whether anything is actually due: once
+per Epic rotation, never twice for the same week, and never before the feed has
+caught up (there is a 15-minute grace after 11:00 Eastern, otherwise an 11:01 run
+logs last week's games and marks the week done).
+
+Each run appends to `weekly.log` with a timestamp and its exit status, so
+`tail -n 40 weekly.log` shows you Thursday's digest whenever you look. A failed
+or `PARTIAL RUN` week is not marked done, so the next day retries it.
+
+```bash
+./run_weekly.sh              # run only if a rotation is unhandled
+./run_weekly.sh --force      # run now anyway
+./install_cron.sh --show     # what is scheduled
+./install_cron.sh --remove   # undo it
 ```
+
+The installer prefers `crontab`, falls back to a systemd user timer (which
+survives sleep via `Persistent=true`), and tells you the one-line `apt install
+cron` if a ChromeOS container has neither. Re-running it replaces the entries
+rather than duplicating them.
 
 ## GOG freebies
 
@@ -219,16 +245,20 @@ assumed correct.
 ## Run it every Thursday
 
 Epic rotates on Thursdays at 11:00 US Eastern, which is 10:00 Central year-round
-because both zones shift together. A crontab entry gets the GFN comparison done
-without thinking about it:
+because both zones shift together. Rather than hand-write a crontab line -- and
+get either the daylight-saving arithmetic or the sleeping-laptop case wrong --
+run `./install_cron.sh`, described under **Making it run itself** above. It
+schedules the combined `weekly.py` digest, not this script alone.
+
+The per-store variant, if you want it on its own clock:
 
 ```
 5 12 * * 4 cd /path/to/epic-gfn-watchlist && /usr/bin/python3 watchlist.py >> watchlist.log 2>&1
 ```
 
-Cron runs in your machine's local zone, so that 12:05 is local noon — fine on a
-Central-time box, skew elsewhere. If you would rather not do that arithmetic,
-let the script wait for the real rotation instead:
+That 12:05 is local noon -- fine on a Central-time box, skewed anywhere else, and
+still skipped entirely by a closed lid. If you would rather not do that
+arithmetic, let the script wait for the real rotation instead:
 
 ```bash
 python3 watchlist.py --wait --links >> claim-links.log 2>&1
